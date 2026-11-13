@@ -8,6 +8,10 @@ on:
       - 'scripts/native_*.py'
       - 'scripts/native_thread_capture.cjs'
       - 'scripts/plan_native_team.py'
+      - 'scripts/check_source_ascii.py'
+      - 'scripts/git_audit.py'
+      - 'tests/test_git_audit.py'
+      - 'tests/test_source_ascii.py'
       - 'tests/test_native_*.py'
       - 'tests/native_thread_capture.cjs'
       - '.github/workflows/native-team-ci.yml'
@@ -34,7 +38,7 @@ jobs:
         run: >-
           python3 -B -m unittest
           test_native_agent_profiles test_native_team test_native_dispatcher
-          test_native_parent_adapter test_native_handoff -v
+          test_native_parent_adapter test_native_handoff test_source_ascii test_git_audit -v
       - name: Verify fixed JavaScript capture helpers without models
         run: node --test tests/native_thread_capture.cjs
       - name: Inspect a non-executing role recommendation

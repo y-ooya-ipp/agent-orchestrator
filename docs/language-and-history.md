@@ -4,7 +4,7 @@ English is the primary language of the runtime's product, setup, usage, and arch
 
 ## Historical Japanese sources
 
-The `docs/*_jp.md` files linked as historical sources from English primary documents preserve their original Japanese bytes. They are historical originals, **not maintained translations of the new English text**. They can contain superseded policy references, old environment-specific status, and earlier feature limits. Use the English primary document and current implementation for present guidance; use the originals to trace what a development phase recorded.
+The 21 Japanese historical sources added with the non-native English guide conversion preserve their original bytes. The four `native-*_jp.md` snapshots are a separate case: they preserve historical text and technical values, but add a status notice and normalize table whitespace/H1 placement for lint. Their exact original bytes remain in the integration baseline Git history. They are historical originals, **not maintained translations of the new English text**. They can contain superseded policy references, old environment-specific status, and earlier feature limits. Use the English primary document and current implementation for present guidance; use the originals to trace what a development phase recorded.
 
 The English conversion preserves the original results and limitations without presenting them as new validation. It also corrects outdated present-tense policy-location and Git-index guidance in the English guides. No live configuration, credentials, logs, databases, service state, or private conversation history was imported.
 

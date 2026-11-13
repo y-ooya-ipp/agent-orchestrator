@@ -44,6 +44,17 @@ class GitAuditTests(unittest.TestCase):
         self.assertTrue(result['passed'],result['findings'])
         self.assertEqual(set(result['staged_files']),audit_module.PORTABLE_CONFIG_FILES)
 
+    def test_exact_public_repository_metadata_and_integration_sources_pass(self):
+        self.assertEqual(len(audit_module.PUBLIC_REPOSITORY_FILES),19)
+        for name in audit_module.PUBLIC_REPOSITORY_FILES:
+            self.write(name,(PROJECT/name).read_bytes())
+        result=self.result()
+        self.assertTrue(result['passed'],result['findings'])
+        for name in ['.github/workflows/unknown.yml','.github/credentials.json',
+                     'integrations/unknown/service.mjs','integrations/sites-approval/.env',
+                     'integrations/sites-approval/operator.local.json']:
+            with self.subTest(name=name):self.assertFalse(audit_module.path_allowed(name))
+
     def test_source_examples_and_empty_secret_environment_template_pass(self):
         for name in ['src/module.py','tests/fixtures/example.sql','docs/example.md',
                      'systemd/aceis-mcp-tunnel.example.service','systemd/aceis-mcp-tunnel.example.yaml',

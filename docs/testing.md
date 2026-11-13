@@ -74,3 +74,32 @@ PYTHONPATH=tests python3 -B -m unittest test_common_policy test_common_policy_ac
 All 57 tests passed in the selected executor. They cover exact source hashes, required editorial documents, changed/missing Git objects, immutable context revalidation, full text delivered once to fresh and resumed threads, missing editorial pins preventing dispatch through the real loader, and old recorded policy versions preventing resume before peer launch. Historical owner metadata remains unchanged.
 
 The protocol checks use `tests/fake_codex.py`, a test-owned runtime, and a version-probe stub. They do not invoke a live Codex model or create nested isolation. This evidence does not establish model compliance, article acceptance, publication readiness, or deployment. The live daemon, AceIS notification worktree, and existing task databases were not used for these checks.
+
+## English and native-team reconciliation (2026-11-13)
+
+The source integration pins accepted `ai-orchestration` commit `7bd7fbdb3777106baf421332a9678e6b1f15509b`, merged through [AI Orchestration PR #8](https://github.com/i-pp/ai-orchestration/pull/8). All five canonical GitHub file contents and Git blob hashes were checked against the adopted manifest. The assembled SHA-256 is `ee32f0fb0655b1ad0b3fbab4117c0315e9c9a8bdb1a895f07e69571303aa8ee3`. A clean, explicitly selected content-equivalent local Git carrier passed the real loader with `working_tree_body_used=false` and `automatic_network=false`; it was not represented as a canonical-origin checkout. No existing operator checkout, service, or saved execution was rebound.
+
+The final combined focused suite passed **562 tests, zero skips**. It includes the 195 [recovered pipeline regressions](branch-reconciliation.md), native role/model handoff and lease tests, policy loading/transitions, approval fixtures, mailbox boundaries, and loopback HTTP fixtures. The fixed JavaScript capture/helper suite separately passed 17 tests. These are offline/simulated/local-fixture results, not live model or deployed-service acceptance.
+
+The two focused agent/pipeline groups are reproducible without starting a model:
+
+```bash
+PYTHONPATH=tests python3 -B -m unittest \
+  test_native_agent_profiles test_native_team test_native_dispatcher \
+  test_native_parent_adapter test_native_handoff test_git_audit test_source_ascii -v
+
+PYTHONPATH=tests python3 -B -m unittest \
+  test_codex_app_protocol test_codex_pipeline test_codex_pipeline_gateway \
+  test_codex_lifecycle test_pipeline_capacity test_pipeline_memory_budget \
+  test_pipeline_policy_migration -v
+
+node --test tests/native_thread_capture.cjs
+python3 -B scripts/check_source_ascii.py
+python3 -B scripts/git_audit.py
+```
+
+The source gates inspect exact Git-index blobs, not unstaged replacements. ASCII validation covers code/configuration extensions, permits escaped Unicode fixture data, and excludes Markdown/historical originals. The package audit preserves secret, operator-local path, mode, conflict, binary, and size checks. Its additional public-source exceptions are exact reviewed filenames, not blanket `.codex`, `.github`, or integration-directory exemptions. The reviewed index passed both gates: 191 source/configuration blobs and 287 total files, with no audit findings.
+
+All changed Markdown was linted with markdownlint-cli2 0.23.3, and all 88 Markdown files passed repository-local link checks. Twenty-one non-native Japanese source snapshots are byte-identical; the four native snapshots preserve content/values with the documented notice and table formatting. The legacy policy, its manifest, and all nine original phase reports remain byte-identical. See [language/history boundaries](language-and-history.md) for exact snapshot-only lint exceptions.
+
+No whole-suite host acceptance, namespace/OS-isolation validation, live Codex generation, provider availability, billing class, service restart, public endpoint, or deployment is claimed. Some historical whole-suite tests require systemd, an installed Tunnel client, or namespace tools; do not run them blindly in an already isolated execution environment. Remaining optional pipeline and failed isolation work stays explicit in the [reconciliation ledger](branch-reconciliation.md).

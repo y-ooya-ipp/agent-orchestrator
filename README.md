@@ -10,7 +10,7 @@ Agent Orchestrator helps operators distinguish running a Codex task from verifyi
 
 There is no Python package installer; the Python code uses the standard library. The documented environment requires Linux, Python 3.14, an existing Codex CLI and file-auth setup, `unshare`, `mount`, `setpriv`, `bwrap`, and cgroup v2 through a delegated systemd user manager. The reported verification host is Ubuntu 26.04.1 with Python 3.14.4 and `codex-cli 0.164.0-alpha.11.1`. Other operating systems, CLI versions, and keyring authentication are unverified. See the [systemd deployment gate](docs/systemd-deployment.md) and [PoC service setup](docs/poc-services.md).
 
-Before `run`, configure the operator-managed common-policy checkout. `config/upstream-policy.json` pins commit `aeef6db1cc9680833277f76962044da0dae501b9`; the default checkout path is `../ai-orchestration` relative to the repository root. Verify the selected checkout and pin with `python3 -B scripts/policy_context.py --format inspect`. See [common-policy setup](docs/common-policy.md) for path overrides and integrity requirements.
+Before `run`, configure the operator-managed common-policy checkout. `config/upstream-policy.json` pins commit `7bd7fbdb3777106baf421332a9678e6b1f15509b`; the default checkout path is `../ai-orchestration` relative to the repository root. Verify the selected checkout and pin with `python3 -B scripts/policy_context.py --format inspect`. See [common-policy setup](docs/common-policy.md) for path overrides and integrity requirements.
 
 ## Usage
 
@@ -23,6 +23,8 @@ The [runner how-to](docs/how-to/run-task.md) demonstrates a read-only flow: chec
 
 ## Advanced Usage
 
+- [Branch reconciliation and recovery references](docs/branch-reconciliation.md)
+- [English documentation and preserved historical sources](docs/language-and-history.md)
 - [Native parallel agent team](docs/native-agent-team.md): explicit GPT-6.1 Sol MAX, three implementation levels, focused independent reviews, and optional advisory orchestration. Use the non-executing planner before constructing a bounded run.
 
 - [Architecture and task lifecycle](docs/architecture.md)
