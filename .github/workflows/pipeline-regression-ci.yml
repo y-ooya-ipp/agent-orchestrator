@@ -9,6 +9,7 @@ on:
       - 'src/resources.py'
       - 'src/daemon.py'
       - 'src/mcp_adapter.py'
+      - 'src/notification_outbox.py'
       - 'scripts/pipeline_policy_migration.py'
       - 'tests/test_codex_*.py'
       - 'tests/test_pipeline_*.py'
@@ -34,5 +35,6 @@ jobs:
         run: >-
           python3 -B -m unittest
           test_codex_app_protocol test_codex_pipeline test_codex_pipeline_gateway
+          test_codex_blocked_ownership
           test_codex_lifecycle test_pipeline_capacity test_pipeline_memory_budget
           test_pipeline_policy_migration -v

@@ -374,6 +374,23 @@ class Adapter:
         except NotificationError:
             raise Invalid('Event history unavailable') from None
 
+    def _confirmed_blocked_input(self, name, arguments, data, principal):
+        """Retain local-owner access only after exact durable creation proof."""
+        runtime = self.notification_runtime
+        outbox = getattr(runtime, 'outbox', None)
+        if (not isinstance(principal, LocalPrincipal) or not self.events_enabled
+                or outbox is None or name not in ('codex_chat_store', 'codex_task_submit')):
+            return False
+        try:
+            if Path(outbox.source_path).absolute() != self.root / 'codex-pipeline.sqlite3':
+                return False
+            return (outbox.thread_owned_by(arguments['thread_id'], principal)
+                    and outbox.source_blocked_input_matches(name, arguments, data) is True)
+        except Exception:
+            # Unavailable or ambiguous proof cannot grant access. The input may
+            # already exist; never create, resubmit or rebind it as recovery.
+            return False
+
     def call_tool(self, name, arguments, rpc_id, request_principal=None):
         if name not in {t['name'] for t in self.tools}: raise Invalid('Tool is not enabled')
         if name == 'orchestrator_status': fields(arguments, [])
@@ -473,7 +490,9 @@ class Adapter:
                               or data.get('state') in ('UNKNOWN', 'BLOCKED'))
                 except PipelineError as exc:
                     data, failed = exc.result(), True
-                if (isinstance(request_principal, LocalPrincipal) and not failed
+                blocked_input = (failed and self._confirmed_blocked_input(
+                    name, arguments, data, request_principal))
+                if (isinstance(request_principal, LocalPrincipal) and (not failed or blocked_input)
                         and self.events_enabled and isinstance(data, dict)):
                     if name == 'codex_thread_start':
                         thread_id = data.get('thread_id')
@@ -493,7 +512,7 @@ class Adapter:
                                 # The operation may already have committed; never replay it here.
                                 data['access_binding'] = 'UNAVAILABLE'
                 if (name in ('codex_task_submit', 'codex_chat_store')
-                        and self.events_enabled and not failed
+                        and self.events_enabled and (not failed or blocked_input)
                         and isinstance(data, dict)):
                     task_id = data.get('task_id') or data.get('id')
                     if task_id:

@@ -35,6 +35,12 @@ A new omitted-effort input may resolve only a freshly observed provider default,
 
 Reusing a request key returns the original selection even if the provider default has changed. Do not use retries to change a stored task's model or effort. Legacy queued tasks without an immutable effort are preserved and blocked, not rewritten or replayed with a guess.
 
+## Keep access to a blocked input
+
+A pre-turn blocker can leave a persisted input even though the tool reports an error. An authenticated local owner retains read, list, event-history and cancel access only after the returned input is matched to the same runtime ledger, authorized thread, exact caller intent and immutable selection. The existing Events authorizer and origin-conflict checks still apply. The result stays `BLOCKED`; access binding is not successful dispatch or permission for another owner.
+
+If that bounded read-only proof is temporarily unavailable, an exact-key retry can reconcile the already persisted input when proof becomes available. Do not change the key or prompt to repair ownership. This exception does not bind or replay `UNKNOWN`, failed, forged or ambiguous results, including a lost turn acknowledgement. It preserves the existing principal-provider-only stdio behavior and adds no identity source or approval channel.
+
 ## Understand the evidence
 
 - A provider catalogue observation describes advertised capabilities. It does not prove generation, account billing class, or future availability.

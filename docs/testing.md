@@ -92,7 +92,7 @@ PYTHONPATH=tests python3 -B -m unittest \
 
 PYTHONPATH=tests python3 -B -m unittest \
   test_codex_app_protocol test_codex_pipeline test_codex_pipeline_gateway \
-  test_codex_lifecycle test_pipeline_capacity test_pipeline_memory_budget \
+  test_codex_blocked_ownership test_codex_lifecycle test_pipeline_capacity test_pipeline_memory_budget \
   test_pipeline_policy_migration -v
 
 node --test tests/native_thread_capture.cjs
@@ -116,7 +116,7 @@ Run this explicitly bounded offline union instead of historical whole-suite disc
 PYTHONPATH=tests python3 -B -m unittest \
   test_approval_portal test_chat_mailbox test_codex_app_protocol test_codex_approval_bridge \
   test_codex_approval_trial_plan test_codex_lifecycle test_codex_pipeline test_codex_pipeline_gateway \
-  test_codex_schema_compatibility test_common_policy test_common_policy_acceptance test_common_policy_migration \
+  test_codex_blocked_ownership test_codex_schema_compatibility test_common_policy test_common_policy_acceptance test_common_policy_migration \
   test_git_audit test_local_llm_mcp test_mailbox_grants test_mcp_events_lifecycle \
   test_mcp_http_transport test_native_agent_profiles test_native_dispatcher test_native_handoff \
   test_native_parent_adapter test_native_team test_notification_outbox test_pipeline_capacity \
@@ -130,3 +130,5 @@ python3 -B scripts/git_audit.py
 The integrated offline checks passed. They cover the recovered pipeline contracts, provider/default/effort/idempotency cases, unsupported and legacy-input blockers, exact duplicated MCP wire-size checks, authenticated owner-page cursor/ownership/scan bounds, metadata ACLs, fixed notification reasons, and native configurable-admission/frozen-run behavior. See [PR #16 checks](https://github.com/i-pp/agent-orchestrator/pull/16/checks) for GitHub-visible results and the exact checked revision. These fixture results do not establish live app-server, model, deployment or host-isolation acceptance.
 
 A catalogue observation does not verify generation or billing. Missing/null provider effort echoes remain unverified; conflicting echoes block. Existing uncertain effects retain their leases, and old queued inputs without an immutable effort are not guessed or rewritten. No live services, policy checkout, credentials, saved execution or operator configuration were rebound. Ordinary daemon session capacity and LAF pool changes require their own matching source/configuration evidence.
+
+The blocked-input ownership regressions compose the real Pipeline, private Outbox, Events service and LocalPrincipal adapter, including pure HTTP and the existing daemon/proxy/gateway route with fake transport. They check owner recovery for definitively persisted pre-turn blockers, unchanged foreign/approval gates, bounded read-only proof and exact-key reconciliation. Real lost-acknowledgement fixtures remain unknown, unbound and non-replayed. No socket, service or real model is used; prearranging task ownership is not a substitute for testing the composed submission path.

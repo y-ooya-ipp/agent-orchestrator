@@ -246,6 +246,7 @@
         "tests/test_codex_app_protocol.py",
         "tests/test_codex_approval_bridge.py",
         "tests/test_codex_approval_trial_plan.py",
+        "tests/test_codex_blocked_ownership.py",
         "tests/test_codex_lifecycle.py",
         "tests/test_codex_pipeline.py",
         "tests/test_codex_pipeline_adapter_extract.py",
