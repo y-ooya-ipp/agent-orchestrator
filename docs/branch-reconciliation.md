@@ -30,7 +30,7 @@ The complete fake `Peer` fixture is recoverable from the pipeline branch, contra
 
 Reconciliation changes tests to the current contracts rather than regressing implementation:
 
-- Opt-in pipeline exposes 15 current operations, including three approval operations. The existing 11 base schemas remain exact and unchanged; the combined list is 26 rather than the old 23.
+- At the reconciliation baseline, the opt-in pipeline exposed 15 operations, including three approval operations. The existing 11 base schemas remained exact and unchanged; that combined list was 26 rather than the older 23. The later [model-discovery interface](codex-model-selection.md) adds read-only catalogue paging without changing those base schemas.
 - The current selected pipeline scheduler profile is 6 GiB, 3072 kernel tasks, and a 256 MiB file ceiling. Base daemon limits and worker/runtime/log limits remain distinct. Tests preserve these configured values and rejection boundaries rather than restoring older 1 GiB/512/64 MiB expectations.
 - Migration journal versions 1 and 2 are supported; the unknown-version test now uses version 3, preserving fail-closed behavior.
 - Importing a fixture TestCase through a module alias avoids accidentally collecting its tests twice.

@@ -58,6 +58,7 @@
         "docs/branch-reconciliation.md",
         "docs/chatgpt-connection-design.md",
         "docs/chatgpt-connection-design_jp.md",
+        "docs/codex-model-selection.md",
         "docs/codex-pipeline-cleanhead-extraction.md",
         "docs/common-policy-rollout.md",
         "docs/common-policy.md",
