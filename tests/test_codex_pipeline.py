@@ -1004,9 +1004,12 @@ class OwnerScopedListingBoundaryTests(unittest.TestCase):
         endpoint = McpHttpEndpoint(adapter, expected_port=8765, allow_single_user_local=True,
                                    principal_provider=current_local_principal)
         cursor, seen, offsets = None, set(), []
-        for _ in range(40):
+        integer_limit = sys.get_int_max_str_digits()
+        digits = min(4096, integer_limit - 1) if integer_limit else 4096
+        request_ids = ['q' * 128, int('9' * digits), chr(0x1f642) * 128, '"\\' * 64]
+        for page_index in range(40):
             arguments = {'limit': 20, **({'cursor': cursor} if cursor else {})}
-            request = {'jsonrpc': '2.0', 'id': 'q' * 128, 'method': 'tools/call', 'params': {
+            request = {'jsonrpc': '2.0', 'id': request_ids[page_index % len(request_ids)], 'method': 'tools/call', 'params': {
                 'name': 'codex_threads_list', 'arguments': arguments,
                 '_meta': {VERSION_META: REQUEST_PROTOCOL, CAPABILITIES_META: {}}}}
             raw = json.dumps(request, separators=(',', ':')).encode()
