@@ -1,8 +1,10 @@
 """Offline requirements for explicit models, role selection, and bounded fan-out."""
 from copy import deepcopy
+import ast
 import importlib.util
 import io
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -141,6 +143,21 @@ class ConcurrencySettingsTests(unittest.TestCase):
         self.assertEqual(result['budgets']['cloud_concurrency'], 3)
         self.assertEqual(result['suggested_concurrency'], 3)
         self.assertEqual(result['concurrency']['selection_source'], 'project_config')
+
+    def test_admission_guide_registry_call_preserves_the_project_setting(self):
+        self.write({'schema_version': 1, 'cloud_concurrency': 1})
+        guide = (PROJECT / 'docs/native-team-poc.md').read_text()
+        calls = re.findall(r'`(native_team\.registry\([^`]*\))`', guide)
+        self.assertTrue(calls, 'Admission guide must show project-aware registry construction')
+        for expression in calls:
+            call = ast.parse(expression, mode='eval').body
+            forwards_project = (
+                bool(call.args) and isinstance(call.args[0], ast.Name) and call.args[0].id == 'project'
+            ) or any(key.arg == 'project' and isinstance(key.value, ast.Name)
+                     and key.value.id == 'project' for key in call.keywords)
+            # Resolve only this recognized path forwarding; never execute prose.
+            selected = registry(self.project if forwards_project else None)
+            self.assertEqual(selected['budgets']['cloud_concurrency'], 1, expression)
 
     def test_explicit_selection_and_reported_executor_limit_are_separate(self):
         self.write({'schema_version': 1, 'cloud_concurrency': 2})

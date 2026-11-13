@@ -16,7 +16,7 @@ git worktree add -b team-task-b "$WORKTREE_B" "$INPUT_REVISION"
 
 Each workspace must be a distinct, non-nested worktree in the project's Git common directory. Configure any ignored operator-local policy selector separately in each worktree. Keep runtime state, secrets, deployment settings, and logs out of tracked source.
 
-A specification has exactly `schema=1`, `goal`, `requirements`, `project`, `policy`, `registry`, and `tasks`. `requirements` is a nonempty string list; `project` is an absolute repository path; `policy` contains `version` and `sha256`. Start the registry with `native_team.registry()` and lower budgets as needed. Each task has `id`, `role`, `backend`, `deps`, `workspace`, `instruction`, and `allowed` paths. The registry supports the current [selectable roles](native-agent-team.md#choose-roles-before-launching); local dispatch remains disabled.
+A specification has exactly `schema=1`, `goal`, `requirements`, `project`, `policy`, `registry`, and `tasks`. `requirements` is a nonempty string list; `project` is an absolute repository path; `policy` contains `version` and `sha256`. Start the registry with `native_team.registry(project)` so the project's [new-run concurrency setting](native-agent-team.md#selecting-new-run-concurrency) is applied, then lower explicit budgets as needed before freezing the specification. Each task has `id`, `role`, `backend`, `deps`, `workspace`, `instruction`, and `allowed` paths. The registry supports the current [selectable roles](native-agent-team.md#choose-roles-before-launching); local dispatch remains disabled.
 
 ```bash
 python3 -B scripts/native_team.py init --run "$RUN_DIR" < team-spec.json
