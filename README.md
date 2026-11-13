@@ -23,6 +23,8 @@ The [runner how-to](docs/how-to/run-task.md) demonstrates a read-only flow: chec
 
 ## Advanced Usage
 
+- [Native parallel agent team](docs/native-agent-team.md): explicit GPT-6.1 Sol MAX, three implementation levels, focused independent reviews, and optional advisory orchestration. Use the non-executing planner before constructing a bounded run.
+
 - [Architecture and task lifecycle](docs/architecture.md)
 - [Workspace isolation](docs/workspace-isolation.md) · [Concurrency](docs/concurrency-design.md) · [Recovery](docs/recovery-design.md)
 - [Daemon](docs/daemon-design.md) · [Scheduler](docs/scheduler-design.md) · [Resource limits](docs/resource-limits.md)
