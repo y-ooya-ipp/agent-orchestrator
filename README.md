@@ -10,7 +10,7 @@ Agent Orchestrator helps operators distinguish running a Codex task from verifyi
 
 There is no Python package installer; the Python code uses the standard library. The documented environment requires Linux, Python 3.14, an existing Codex CLI and file-auth setup, `unshare`, `mount`, `setpriv`, `bwrap`, and cgroup v2 through a delegated systemd user manager. The reported verification host is Ubuntu 26.04.1 with Python 3.14.4 and `codex-cli 0.164.0-alpha.11.1`. Other operating systems, CLI versions, and keyring authentication are unverified. See the [systemd deployment gate](docs/systemd-deployment.md) and [PoC service setup](docs/poc-services.md).
 
-Before `run`, configure the operator-managed common-policy checkout. `config/upstream-policy.json` pins commit `7bd7fbdb3777106baf421332a9678e6b1f15509b`; the default checkout path is `../ai-orchestration` relative to the repository root. Verify the selected checkout and pin with `python3 -B scripts/policy_context.py --format inspect`. See [common-policy setup](docs/common-policy.md) for path overrides and integrity requirements.
+Before `run`, configure the operator-managed common-policy checkout. `config/upstream-policy.json` pins commit `346f337c5dcdd1249adadcd1e31123ca02702418`; the default checkout path is `../ai-orchestration` relative to the repository root. Verify the selected checkout and pin with `python3 -B scripts/policy_context.py --format inspect`. See [common-policy setup](docs/common-policy.md) for path overrides and integrity requirements.
 
 ## Usage
 
