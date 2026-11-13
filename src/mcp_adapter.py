@@ -35,6 +35,11 @@ SERVER_META = 'io.modelcontextprotocol/serverInfo'
 SERVER_INFO = {'name': 'agent-orchestrator-local', 'version': '0.2.0'}
 MAX_INPUT = 65536
 MAX_OUTPUT = 65536
+# Public data is duplicated into text and structuredContent, then JSON escaped.
+OWNER_LIST_DATA_BYTES = 20 * 1024
+OWNER_LIST_SCAN_RECORDS = 80
+OWNER_LIST_SCAN_PAGES = 80
+OWNER_LIST_SCAN_SECONDS = 5
 AUDIT_LIMIT = 4 * 1024**2
 TIMEOUT = 2
 KEY_PATTERN = r'^[A-Za-z0-9_.:-]{1,128}$'
@@ -298,15 +303,24 @@ class Adapter:
         if (not isinstance(principal, LocalPrincipal) or not self.events_enabled
                 or runtime is None or getattr(runtime, 'outbox', None) is None):
             raise Invalid('Authenticated task ACL unavailable')
-        records = []
+        records, scanned, cursors = [], 0, set()
         cursor = None
-        for _page_number in range(4):
+        deadline = time.monotonic() + OWNER_LIST_SCAN_SECONDS
+        for _page_number in range(OWNER_LIST_SCAN_PAGES):
+            if time.monotonic() >= deadline:
+                raise Invalid('Owner listing scan deadline reached')
             page_args = {'limit': 20}
             if cursor is not None:
                 page_args['cursor'] = cursor
             page = self.pipeline.dispatch('codex_threads_list', page_args)
-            if not isinstance(page, dict):
+            if time.monotonic() >= deadline:
+                raise Invalid('Owner listing scan deadline reached')
+            if (not isinstance(page, dict) or not isinstance(page.get('threads'), list)
+                    or not isinstance(page.get('tasks'), list)):
                 raise Invalid('Invalid pipeline listing')
+            scanned += len(page['threads']) + len(page['tasks'])
+            if scanned > OWNER_LIST_SCAN_RECORDS:
+                raise Invalid('Owner listing exceeds bounded record count')
             for thread in page.get('threads', []):
                 if (isinstance(thread, dict) and runtime.outbox.thread_owned_by(
                         thread.get('id'), principal)):
@@ -318,6 +332,10 @@ class Adapter:
             cursor = page.get('next_cursor')
             if cursor is None:
                 break
+            if (not isinstance(cursor, str) or not re.fullmatch(r'[a-f0-9]{64}:[0-9]{1,6}', cursor)
+                    or cursor in cursors):
+                raise Invalid('Invalid pipeline listing cursor')
+            cursors.add(cursor)
         else:
             raise Invalid('Owner listing exceeds bounded page count')
         snapshot = hashlib.sha256(json.dumps(records, sort_keys=True,
@@ -332,12 +350,18 @@ class Adapter:
             if offset > len(records):
                 raise Invalid('Invalid owner listing cursor')
         limit = arguments.get('limit', 20)
-        page_records = records[offset:offset + limit]
-        next_offset = offset + len(page_records)
-        return {'threads': [item['data'] for item in page_records if item['kind'] == 'thread'],
-                'tasks': [item['data'] for item in page_records if item['kind'] == 'task'],
-                'total_records': len(records),
-                'next_cursor': f'{snapshot}:{next_offset}' if next_offset < len(records) else None}
+        end = min(len(records), offset + limit)
+        while True:
+            page_records = records[offset:end]
+            result = {'threads': [item['data'] for item in page_records if item['kind'] == 'thread'],
+                      'tasks': [item['data'] for item in page_records if item['kind'] == 'task'],
+                      'total_records': len(records),
+                      'next_cursor': f'{snapshot}:{end}' if end < len(records) else None}
+            if len(json.dumps(result, ensure_ascii=True, allow_nan=False).encode()) <= OWNER_LIST_DATA_BYTES:
+                return result
+            end -= 1
+            if end <= offset:
+                raise Invalid('Owner listing exceeds bounded record size')
 
     def _owner_scoped_events(self, principal, arguments):
         runtime = self.notification_runtime

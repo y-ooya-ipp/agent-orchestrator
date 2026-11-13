@@ -960,5 +960,146 @@ class EffortStorageBoundaryTests(unittest.TestCase):
         self.assertEqual(len(seen),33)
 
 
+class OwnerScopedListingBoundaryTests(unittest.TestCase):
+    setUp = PipelineTests.setUp
+    tearDown = PipelineTests.tearDown
+    new_pipeline = PipelineTests.new_pipeline
+    call = PipelineTests.call
+    complete = PipelineTests.complete
+
+    def owned_adapter(self, tasks, threads):
+        from types import SimpleNamespace
+        class Owned:
+            def thread_owned_by(self, identifier, principal): return identifier in threads
+            def task_owned_by(self, identifier, principal): return identifier in tasks
+        adapter = Adapter(self.root, allow_codex_pipeline=True, pipeline=self.pipeline)
+        adapter.events_enabled = True
+        adapter.notification_runtime = SimpleNamespace(outbox=Owned())
+        self.addCleanup(adapter.audit.close)
+        return adapter
+
+    def test_authenticated_owner_pages_fit_exact_wire_and_keep_all_owned_records(self):
+        from local_principal import current_local_principal
+        from mcp_adapter import REQUEST_PROTOCOL, VERSION_META, CAPABILITIES_META
+        from mcp_http_transport import McpHttpEndpoint, MAX_HTTP_BODY
+        model, effort = 'm' * 160, '"\\' * 32
+        row = copy.deepcopy(MODEL)
+        row.update(id=model, model=model, defaultReasoningEffort=effort,
+                   supportedReasoningEfforts=[{'reasoningEffort': effort, 'description': ''}])
+        self.peer.models = [row]
+        self.pipeline.policy['models'] = [model]
+        self.pipeline.policy['max_tasks'] = 32
+        owned_thread = self.call('thread_start', workspace='fixture', model=model,
+            reasoning_effort=effort, request_key='owned-thread')['thread_id']
+        other_thread = self.call('thread_start', workspace='fixture', model=model,
+            reasoning_effort=effort, request_key='other-thread')['thread_id']
+        tasks = set()
+        for n in range(32):
+            thread = other_thread if n == 0 else owned_thread
+            task = self.call('task_submit', thread_id=thread, prompt='Owned fixture ' + str(n),
+                            reasoning_effort=effort, request_key='owned-task-' + str(n))
+            self.complete(thread)
+            if n: tasks.add(task['id'])
+        adapter = self.owned_adapter(tasks, {owned_thread})
+        endpoint = McpHttpEndpoint(adapter, expected_port=8765, allow_single_user_local=True,
+                                   principal_provider=current_local_principal)
+        cursor, seen, offsets = None, set(), []
+        for _ in range(40):
+            arguments = {'limit': 20, **({'cursor': cursor} if cursor else {})}
+            request = {'jsonrpc': '2.0', 'id': 'q' * 128, 'method': 'tools/call', 'params': {
+                'name': 'codex_threads_list', 'arguments': arguments,
+                '_meta': {VERSION_META: REQUEST_PROTOCOL, CAPABILITIES_META: {}}}}
+            raw = json.dumps(request, separators=(',', ':')).encode()
+            headers = {'Host': '127.0.0.1:8765', 'Content-Type': 'application/json',
+                'Accept': 'application/json, text/event-stream', 'Content-Length': str(len(raw)),
+                'MCP-Protocol-Version': REQUEST_PROTOCOL, 'Mcp-Method': 'tools/call',
+                'Mcp-Name': 'codex_threads_list'}
+            status, _, wire = endpoint.handle('POST', '/mcp', headers, raw)
+            self.assertEqual(status, 200, wire[:200])
+            self.assertLess(len(wire), MAX_HTTP_BODY)
+            result = json.loads(wire)['result']
+            self.assertFalse(result['isError'])
+            self.assertEqual(json.loads(result['content'][0]['text']), result['structuredContent'])
+            page = result['structuredContent']['data']
+            identifiers = {x['id'] for x in page['threads'] + page['tasks']}
+            self.assertTrue(identifiers)
+            self.assertFalse(seen & identifiers)
+            seen.update(identifiers)
+            self.assertNotIn(other_thread, identifiers)
+            self.assertEqual(page['total_records'], len(tasks) + 1)
+            cursor = page['next_cursor']
+            if cursor is None: break
+            offsets.append(int(cursor.split(':')[1]))
+        else: self.fail('Owner cursor did not reach its terminal page')
+        self.assertEqual(seen, tasks | {owned_thread})
+        self.assertTrue(offsets)
+        self.assertEqual(offsets, sorted(set(offsets)))
+
+    def test_owner_scan_keeps_logical_record_bound_with_short_global_pages(self):
+        from local_principal import current_local_principal
+        from mcp_adapter import Invalid
+        import uuid
+        tasks = {str(uuid.UUID(int=n + 1)) for n in range(81)}
+        adapter = self.owned_adapter(tasks, set())
+        class Pages:
+            def __init__(self, count): self.count, self.calls = count, 0
+            def dispatch(self, name, arguments):
+                offset = self.calls
+                self.calls += 1
+                return {'threads': [], 'tasks': [{'id': str(uuid.UUID(int=offset + 1))}],
+                    'next_cursor': 'a' * 64 + ':' + str(self.calls) if self.calls < self.count else None}
+        adapter.pipeline = pages = Pages(80)
+        result = adapter._owner_scoped_thread_listing(current_local_principal(), {})
+        self.assertEqual(result['total_records'], 80)
+        self.assertEqual(pages.calls, 80)
+        adapter.pipeline = pages = Pages(81)
+        with self.assertRaisesRegex(Invalid, 'Owner listing exceeds'):
+            adapter._owner_scoped_thread_listing(current_local_principal(), {})
+        self.assertLessEqual(pages.calls, 80)
+
+    def test_owner_scan_deadline_stops_before_another_global_read(self):
+        from local_principal import current_local_principal
+        from mcp_adapter import Invalid
+        adapter = self.owned_adapter(set(), set())
+        class Pages:
+            def __init__(self): self.calls = 0
+            def dispatch(self, name, arguments):
+                self.calls += 1
+                return {'threads': [], 'tasks': [], 'next_cursor': 'a' * 64 + ':1'}
+        adapter.pipeline = pages = Pages()
+        with patch('mcp_adapter.time.monotonic', side_effect=[0, 0, 6]):
+            with self.assertRaisesRegex(Invalid, 'Owner listing scan deadline'):
+                adapter._owner_scoped_thread_listing(current_local_principal(), {})
+        self.assertEqual(pages.calls, 1)
+
+    def test_owner_scan_rejects_repeated_cursor_without_looping(self):
+        from local_principal import current_local_principal
+        from mcp_adapter import Invalid
+        adapter = self.owned_adapter(set(), set())
+        class Pages:
+            def __init__(self): self.calls = 0
+            def dispatch(self, name, arguments):
+                self.calls += 1
+                return {'threads': [], 'tasks': [], 'next_cursor': 'a' * 64 + ':1'}
+        adapter.pipeline = pages = Pages()
+        with self.assertRaisesRegex(Invalid, 'Invalid pipeline listing cursor'):
+            adapter._owner_scoped_thread_listing(current_local_principal(), {})
+        self.assertEqual(pages.calls, 2)
+
+    def test_oversized_single_owned_record_is_not_dropped_or_partially_returned(self):
+        from local_principal import current_local_principal
+        from mcp_adapter import Invalid
+        import uuid
+        task = str(uuid.uuid4())
+        adapter = self.owned_adapter({task}, set())
+        class Page:
+            def dispatch(self, name, arguments):
+                return {'threads': [], 'tasks': [{'id': task, 'legacy_receipt': 'x' * 30000}],
+                        'next_cursor': None}
+        adapter.pipeline = Page()
+        with self.assertRaisesRegex(Invalid, 'Owner listing exceeds bounded record size'):
+            adapter._owner_scoped_thread_listing(current_local_principal(), {})
+
+
 if __name__ == '__main__':
     unittest.main()
