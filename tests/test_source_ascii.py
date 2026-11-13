@@ -98,6 +98,25 @@ class SourceAsciiTests(unittest.TestCase):
             for name in sorted(CONFIG_FIXTURES)
         ])
 
+    def test_case_variant_source_suffixes_and_example_markers_are_guarded(self):
+        names = ('src/module.PY', 'examples/check.YML',
+                 'examples/fixture.SERVICE.EXAMPLE',
+                 'examples/fixture.TOML.ExAmPlE.EXAMPLE')
+        for name in names:
+            self.stage(name, '# ASCII fixture\n')
+        result = module.check(self.root)
+        self.assertTrue(result['passed'])
+        self.assertEqual(result['checked_sources'], len(names))
+        for name in names:
+            self.stage(name, '# ' + chr(0x3042) + '\n')
+        result = module.check(self.root)
+        self.assertFalse(result['passed'])
+        self.assertEqual(result['checked_sources'], len(names))
+        self.assertEqual(result['findings'], [
+            {'path': name, 'line': 1, 'rule': 'non_ascii_source'}
+            for name in sorted(names)
+        ])
+
     def test_unstaged_unicode_cannot_replace_ascii_configuration_index(self):
         for name in CONFIG_FIXTURES:
             path = self.stage(name, '# ASCII configuration fixture\n')
@@ -115,6 +134,7 @@ class SourceAsciiTests(unittest.TestCase):
             'systemd/original_jp.md.example',
             'systemd/original_jp.markdown',
             'systemd/history/original_jp.MARKDOWN',
+            'systemd/history/original_jp.MD.EXAMPLE',
         )
         paths = [self.stage(name, chr(0x3042) + '\n') for name in names]
         before = [path.read_bytes() for path in paths]

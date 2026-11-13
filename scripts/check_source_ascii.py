@@ -12,12 +12,12 @@ CONFIG_ROOTS = {'config', 'systemd'}
 def is_source_or_config(name):
     path = Path(name)
     # Examples keep the underlying format, including compound unit filenames.
-    while path.suffix == '.example':
+    while path.suffix.lower() == '.example':
         path = path.with_suffix('')
     if path.suffix.lower() in {'.md', '.markdown'}:
         return False
     # Include suffixless/unusual configuration, such as the AppArmor draft.
-    return (path.suffix in SUFFIXES or path.name == '.gitignore'
+    return (path.suffix.lower() in SUFFIXES or path.name == '.gitignore'
             or path.parts[0] in CONFIG_ROOTS)
 
 
