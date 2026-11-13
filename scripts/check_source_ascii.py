@@ -5,7 +5,20 @@ from pathlib import Path
 import subprocess
 
 SUFFIXES = {'.py', '.js', '.mjs', '.cjs', '.ts', '.mts', '.toml', '.json',
-            '.jsonc', '.sql', '.sh', '.yml', '.yaml'}
+            '.jsonc', '.sql', '.sh', '.yml', '.yaml', '.service'}
+CONFIG_ROOTS = {'config', 'systemd'}
+
+
+def is_source_or_config(name):
+    path = Path(name)
+    # Examples keep the underlying format, including compound unit filenames.
+    while path.suffix == '.example':
+        path = path.with_suffix('')
+    if path.suffix.lower() in {'.md', '.markdown'}:
+        return False
+    # Include suffixless/unusual configuration, such as the AppArmor draft.
+    return (path.suffix in SUFFIXES or path.name == '.gitignore'
+            or path.parts[0] in CONFIG_ROOTS)
 
 
 def check(root):
@@ -17,7 +30,7 @@ def check(root):
     for record in filter(None, records):
         metadata, path = record.split(b'\t', 1)
         name = path.decode('utf-8')
-        if Path(name).suffix not in SUFFIXES:
+        if not is_source_or_config(name):
             continue
         checked += 1
         mode, blob, stage = metadata.decode('ascii').split()
