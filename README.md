@@ -25,7 +25,7 @@ The [runner how-to](docs/how-to/run-task.md) demonstrates a read-only flow: chec
 
 - [Branch reconciliation and recovery references](docs/branch-reconciliation.md)
 - [English documentation and preserved historical sources](docs/language-and-history.md)
-- [Native parallel agent team](docs/native-agent-team.md): explicit GPT-6.1 Sol MAX, three implementation levels, focused independent reviews, and optional advisory orchestration. Use the non-executing planner before constructing a bounded run.
+- [Native parallel agent team](docs/native-agent-team.md): explicit per-role model settings, three implementation levels, focused independent reviews, and optional advisory orchestration. Use the non-executing planner before constructing a bounded run.
 
 - [Architecture and task lifecycle](docs/architecture.md)
 - [Workspace isolation](docs/workspace-isolation.md) · [Concurrency](docs/concurrency-design.md) · [Recovery](docs/recovery-design.md)
