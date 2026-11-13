@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - '.codex/**'
+      - 'config/native-team.json'
       - 'src/native_*.py'
       - 'scripts/native_*.py'
       - 'scripts/native_thread_capture.cjs'

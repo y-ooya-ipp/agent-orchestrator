@@ -1,5 +1,6 @@
 """Bounded role recommendations and profile validation, without model execution."""
 from copy import deepcopy
+import json
 from pathlib import Path
 import tomllib
 
@@ -33,6 +34,60 @@ BUDGET_CEILINGS = {
 }
 
 
+def configured_budgets(project=None, *, requested=None, executor_limit=None):
+    """Resolve a new-run default; never change active leases or claim capacity discovery."""
+    configured, source = 'max', 'profile_default'
+    if project is not None:
+        path = Path(project) / 'config/native-team.json'
+        if any(part.is_symlink() for part in [path, *path.parents]):
+            raise ValueError('UNSAFE_NATIVE_SETTINGS_PATH')
+        if path.exists():
+            if not path.is_file() or path.stat().st_size > 4096:
+                raise ValueError('INVALID_NATIVE_SETTINGS')
+            raw = path.read_bytes()
+            if len(raw) > 4096:
+                raise ValueError('INVALID_NATIVE_SETTINGS')
+
+            def unique(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError('DUPLICATE_NATIVE_SETTING')
+                    result[key] = value
+                return result
+
+            try:
+                settings = json.loads(raw.decode('utf-8'), object_pairs_hook=unique)
+            except (UnicodeError, json.JSONDecodeError, RecursionError):
+                raise ValueError('INVALID_NATIVE_SETTINGS') from None
+            if (not isinstance(settings, dict)
+                    or set(settings) != {'schema_version', 'cloud_concurrency'}
+                    or type(settings['schema_version']) is not int
+                    or settings['schema_version'] != 1):
+                raise ValueError('INVALID_NATIVE_SETTINGS')
+            configured, source = settings['cloud_concurrency'], 'project_config'
+    ceiling = BUDGET_CEILINGS['cloud_concurrency']
+
+    def valid(value):
+        return value == 'max' if type(value) is str else type(value) is int and 1 <= value <= ceiling
+
+    if not valid(configured) or (requested is not None and not valid(requested)):
+        raise ValueError('INVALID_NATIVE_CONCURRENCY')
+    if executor_limit is not None and (type(executor_limit) is not int or executor_limit < 1):
+        raise ValueError('INVALID_EXECUTOR_LIMIT')
+    selected = configured if requested is None else requested
+    effective = min(ceiling, ceiling if selected == 'max' else selected,
+                    ceiling if executor_limit is None else executor_limit)
+    budgets = deepcopy(BUDGET_CEILINGS)
+    budgets['cloud_concurrency'] = effective
+    return budgets, {'configured': configured, 'requested': selected, 'effective': effective,
+                     'project_ceiling': ceiling, 'executor_limit': executor_limit,
+                     'executor_limit_verified': False,
+                     'executor_limit_source': 'not_reported' if executor_limit is None else 'caller_reported',
+                     'selection_source': source if requested is None else 'override',
+                     'active_runs_changed': False}
+
+
 def role_registry():
     return {name: {'native_role': native, 'writes': writes}
             for name, (native, writes) in ROLES.items()}
@@ -60,7 +115,8 @@ def load_profile(project, role):
 
 def recommend(purpose, complexity='standard', *, parallel_parts=1,
               security_sensitive=False, performance_sensitive=False,
-              cross_project=False):
+              cross_project=False, project=None, cloud_concurrency=None,
+              executor_limit=None):
     """Select roles, not actors or permissions. The parent constructs the DAG."""
     if purpose not in {'implementation', 'documentation', 'research', 'orchestration'}:
         raise ValueError('UNKNOWN_TASK_PURPOSE')
@@ -71,6 +127,8 @@ def recommend(purpose, complexity='standard', *, parallel_parts=1,
     if any(type(v) is not bool for v in
            [security_sensitive, performance_sensitive, cross_project]):
         raise ValueError('BOOLEAN_RISK_FLAGS_REQUIRED')
+    budgets, concurrency = configured_budgets(project, requested=cloud_concurrency,
+                                             executor_limit=executor_limit)
     if purpose in {'research', 'orchestration'} and parallel_parts != 1:
         raise ValueError('SINGLE_ADVISORY_ASSIGNMENT_REQUIRED')
     planning = (purpose != 'orchestration'
@@ -101,11 +159,11 @@ def recommend(purpose, complexity='standard', *, parallel_parts=1,
     # Coordinator admission is a dispatch too, even though it does not spawn a child.
     integration_dispatches = int(purpose in {'implementation', 'documentation'})
     dispatches = sum(item['count'] for item in assignments) + integration_dispatches
-    if dispatches > BUDGET_CEILINGS['max_dispatches']:
+    if dispatches > budgets['max_dispatches']:
         raise ValueError('RECOMMENDATION_EXCEEDS_DISPATCH_BUDGET')
     return {'assignments': assignments,
-            'budgets': deepcopy(BUDGET_CEILINGS),
-            'suggested_concurrency': min(parallel_parts, BUDGET_CEILINGS['cloud_concurrency']),
+            'budgets': budgets, 'concurrency': concurrency,
+            'suggested_concurrency': min(parallel_parts, budgets['cloud_concurrency']),
             'required_dispatches': dispatches,
             'parent_integration_dispatches': integration_dispatches,
             'automatic_dispatch': False, 'automatic_retry': False,

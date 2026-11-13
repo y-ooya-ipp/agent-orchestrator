@@ -28,6 +28,7 @@ PORTABLE_CONFIG_FILES = {
     ".codex/agents/security_reviewer.toml",
     ".codex/agents/test_reviewer.toml",
     "config/codex-pipeline.concurrent.example.json",
+    "config/native-team.json",
     "config/policy.json",
     "config/upstream-policy.json",
     "policies.md",

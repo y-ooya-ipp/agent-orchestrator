@@ -11,6 +11,15 @@ from native_agent_profiles import ROLES, recommend, load_profile
 from native_team_artifacts import _no_symlinks
 
 
+def concurrency_value(value):
+    if value == 'max':
+        return value
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError('Use max or a positive integer.') from None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--purpose', required=True,
@@ -20,13 +29,18 @@ def main(argv=None):
     parser.add_argument('--security-sensitive', action='store_true')
     parser.add_argument('--performance-sensitive', action='store_true')
     parser.add_argument('--cross-project', action='store_true')
+    parser.add_argument('--concurrency', type=concurrency_value,
+                        help='New-run worker choice: max or a lower count; defaults to project settings.')
+    parser.add_argument('--executor-limit', type=int,
+                        help='Caller-reported available child slots, not total slots including the parent.')
     args = parser.parse_args(argv)
     try:
         result = recommend(args.purpose, args.complexity,
                            parallel_parts=args.parallel_parts,
                            security_sensitive=args.security_sensitive,
                            performance_sensitive=args.performance_sensitive,
-                           cross_project=args.cross_project)
+                           cross_project=args.cross_project, project=PROJECT,
+                           cloud_concurrency=args.concurrency, executor_limit=args.executor_limit)
         for assignment in result['assignments']:
             native = assignment['role']
             path = PROJECT / '.codex/agents' / (ROLES[native][0] + '.toml')

@@ -37,7 +37,7 @@ class GitAuditTests(unittest.TestCase):
         return audit_module.audit(self.root)
 
     def test_only_reviewed_portable_policy_role_skill_files_pass(self):
-        self.assertEqual(len(audit_module.PORTABLE_CONFIG_FILES),21)
+        self.assertEqual(len(audit_module.PORTABLE_CONFIG_FILES),22)
         for name in audit_module.PORTABLE_CONFIG_FILES:
             self.write(name,(PROJECT/name).read_bytes())
         result=self.result()
@@ -68,6 +68,7 @@ class GitAuditTests(unittest.TestCase):
                '.codex/agents/orchestrator.private.toml','.agents/skills/common-policy/auth.json',
                '.serena/project.yml','.vscode/settings.json','.aws/credentials',
                'config/policy.local.json','examples/host.private/.env.example',
+               'config/native-team.local.json','config/native-team.private.json',
                '.env.production','examples/private.key','docs/session.jsonl',
                'docs/runner.pid','docs/runner.socket','docs/local.env',
                'docs/project.code-workspace','docs/.coverage','src/pkg.egg-info/PKG-INFO',

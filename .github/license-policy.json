@@ -45,6 +45,7 @@
         "README.md",
         "README_jp.md",
         "config/codex-pipeline.concurrent.example.json",
+        "config/native-team.json",
         "config/policy.json",
         "config/upstream-policy.json",
         "docs/apparmor-policy-design.md",

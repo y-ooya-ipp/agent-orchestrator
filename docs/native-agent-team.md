@@ -53,6 +53,21 @@ Model choice, fallback permission, and uncertain-generation handling come from t
 
 Use lower budgets when the task, executor slots, available worktrees, or measured resources require them. An unknown or timed-out worker keeps its lease until its actual terminal state is confirmed. Interrupt acceptance is not terminal confirmation. These limits are not host-wide quotas, a billing cap, or an OS watchdog.
 
+### Selecting new-run concurrency
+
+[`config/native-team.json`](../config/native-team.json) selects the native profile's new-run default. It currently uses `"cloud_concurrency": "max"`, meaning the full six-child source ceiling, not an arbitrary platform maximum. Choose an integer from 1 to 6 to lower the default. The planner reads this file; Python callers use `registry(project)` to obtain the same resolved budgets for the immutable team specification. A run's explicit budget remains frozen after admission. Editing this default does not rebind an existing run or alter a live service.
+
+The planner also accepts an explicit selection and a separately reported executor limit:
+
+```bash
+python3 -B scripts/plan_native_team.py --purpose implementation \
+  --parallel-parts 8 --concurrency max --executor-limit 6
+```
+
+`--concurrency` deliberately overrides the new-run default. `--executor-limit` counts available **child** slots, excluding the coordinating parent. The resolved budget is the minimum of that choice, any reported executor limit, and this profile's six-child ceiling. The output records the request, effective budget, and whether it came from the project or an override. It labels the executor limit as caller-reported and unverified, not discovered capacity. The parent must check actual API slots, independent worktrees, and physical resource constraints before dispatch. Invalid, oversized, duplicate-key, or symlinked settings fail instead of silently selecting the maximum.
+
+Native collaboration slots and model aliases are separate from Codex app-server sessions, its provider-advertised models/efforts, and a LAF pool's limit. Do not apply one transport's capacity or model names to another. The native role compatibility values above are not an account-entitlement catalogue; the planner does not claim model availability or observed execution settings.
+
 ## Runtime boundaries
 
 - [NativeTeam](native-team-poc.md) validates DAG admission, clean worktrees, fixed policy/revisions, leases, artifact allowlists, and completion receipts.

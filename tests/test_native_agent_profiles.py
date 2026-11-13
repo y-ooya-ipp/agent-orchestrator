@@ -14,7 +14,7 @@ from unittest.mock import patch
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(PROJECT / 'src'), str(PROJECT / 'tests')]
 from native_agent_profiles import (ROLES, MODELS, BUDGET_CEILINGS,
-                                   load_profile, recommend, role_registry)
+                                   configured_budgets, load_profile, recommend, role_registry)
 from native_team import NativeTeam, registry
 from native_dispatcher import NativeDispatcher
 from native_parent_adapter import NativeParentAdapter, AdapterError
@@ -114,11 +114,116 @@ class RecommendationTests(unittest.TestCase):
         self.assertNotIn(str(PROJECT), output.getvalue())
 
 
+class ConcurrencySettingsTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name)
+        (self.project / 'config').mkdir()
+        self.config = self.project / 'config/native-team.json'
+
+    def write(self, value):
+        self.config.write_text(json.dumps(value))
+
+    def test_max_is_the_default_within_this_transport_ceiling(self):
+        budgets, selection = configured_budgets(self.project)
+        self.assertEqual(budgets, BUDGET_CEILINGS)
+        self.assertEqual(selection['requested'], 'max')
+        self.assertEqual(selection['effective'], 6)
+        self.assertEqual(selection['selection_source'], 'profile_default')
+        self.assertIsNone(selection['executor_limit'])
+        self.assertFalse(selection['executor_limit_verified'])
+
+    def test_project_setting_reaches_registry_and_recommendation(self):
+        self.write({'schema_version': 1, 'cloud_concurrency': 3})
+        self.assertEqual(registry(self.project)['budgets']['cloud_concurrency'], 3)
+        result = recommend('implementation', parallel_parts=8, project=self.project)
+        self.assertEqual(result['budgets']['cloud_concurrency'], 3)
+        self.assertEqual(result['suggested_concurrency'], 3)
+        self.assertEqual(result['concurrency']['selection_source'], 'project_config')
+
+    def test_explicit_selection_and_reported_executor_limit_are_separate(self):
+        self.write({'schema_version': 1, 'cloud_concurrency': 2})
+        budgets, selection = configured_budgets(self.project, requested='max', executor_limit=4)
+        self.assertEqual(budgets['cloud_concurrency'], 4)
+        self.assertEqual(selection['configured'], 2)
+        self.assertEqual(selection['requested'], 'max')
+        self.assertEqual(selection['selection_source'], 'override')
+        self.assertFalse(selection['executor_limit_verified'])
+        self.assertEqual(configured_budgets(self.project, requested=5, executor_limit=2)[0]['cloud_concurrency'], 2)
+        self.assertEqual(configured_budgets(self.project, executor_limit=100)[0]['cloud_concurrency'], 2)
+
+    def test_invalid_or_oversized_settings_fail_instead_of_using_max(self):
+        values = [None, {}, {'schema_version': True, 'cloud_concurrency': 'max'},
+                  {'schema_version': 1, 'cloud_concurrency': True},
+                  {'schema_version': 1, 'cloud_concurrency': 0},
+                  {'schema_version': 1, 'cloud_concurrency': 7},
+                  {'schema_version': 1, 'cloud_concurrency': 'automatic'},
+                  {'schema_version': 1, 'cloud_concurrency': 'max', 'extra': 1}]
+        for value in values:
+            self.write(value)
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                configured_budgets(self.project)
+        self.config.write_text(' ' * 4097)
+        with self.assertRaises(ValueError):
+            configured_budgets(self.project)
+        self.config.write_text('{"schema_version":1,"cloud_concurrency":1,"cloud_concurrency":6}')
+        with self.assertRaises(ValueError):
+            configured_budgets(self.project)
+        self.config.write_text('[' * 1500 + '0' + ']' * 1500)
+        with self.assertRaises(ValueError):
+            configured_budgets(self.project)
+
+    def test_invalid_overrides_and_executor_limits_fail(self):
+        for value in [0, 7, True, 2.5, '6', 'unknown']:
+            with self.subTest(requested=value), self.assertRaises(ValueError):
+                configured_budgets(self.project, requested=value)
+        for value in [0, -1, True, 2.5, '6']:
+            with self.subTest(executor_limit=value), self.assertRaises(ValueError):
+                configured_budgets(self.project, executor_limit=value)
+
+    def test_symlink_settings_are_not_followed(self):
+        target = self.project / 'external.json'
+        target.write_text('{"schema_version":1,"cloud_concurrency":"max"}')
+        self.config.symlink_to(target)
+        with self.assertRaises(ValueError):
+            configured_budgets(self.project)
+
+    def test_cli_applies_project_max_and_lower_explicit_limit_without_starting_work(self):
+        with patch('sys.stdout', new_callable=io.StringIO) as output:
+            code = cli.main(['--purpose', 'implementation', '--parallel-parts', '8',
+                             '--concurrency', 'max', '--executor-limit', '2'])
+        self.assertEqual(code, 0)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result['budgets']['cloud_concurrency'], 2)
+        self.assertEqual(result['suggested_concurrency'], 2)
+        self.assertFalse(result['concurrency']['executor_limit_verified'])
+        self.assertFalse(result['automatic_dispatch'])
+        self.assertFalse(result['availability_verified'])
+
+
 class ModelHandoffTests(unittest.TestCase):
     def setUp(self):
         self.f = fixtures.ParentAdapterTests('test_spawn_id_scope_and_duplicate_ack')
         self.f.setUp()
         self.addCleanup(self.f.doCleanups)
+
+    def test_selected_project_concurrency_controls_admission_and_stays_frozen(self):
+        project = self.f.f.project
+        path = project / 'config/native-team.json'
+        path.parent.mkdir(exist_ok=True)
+        path.write_text('{"schema_version":1,"cloud_concurrency":1}')
+        spec = deepcopy(self.f.spec)
+        spec['registry'] = registry(project)
+        dispatcher = NativeDispatcher.receive(self.f.f.root / 'configured-run', spec,
+                                              'fixture', clock=self.f.clock)
+        adapter = NativeParentAdapter.configure(dispatcher, '/root', step_limit=30)
+        calls = adapter.step()['tool_calls']
+        self.assertEqual(len([c for c in calls if c['tool'] == 'collaboration.spawn_agent']), 1)
+        self.assertEqual(dispatcher.snapshot()['spec']['registry']['budgets']['cloud_concurrency'], 1)
+        path.write_text('{"schema_version":1,"cloud_concurrency":3}')
+        self.assertEqual(registry(project)['budgets']['cloud_concurrency'], 3)
+        self.assertEqual(dispatcher.snapshot()['spec']['registry']['budgets']['cloud_concurrency'], 1)
 
     def new_adapter(self, role, suffix):
         spec = deepcopy(self.f.spec)

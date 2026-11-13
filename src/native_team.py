@@ -16,7 +16,7 @@ import time
 import uuid
 
 from native_team_plan import Plan
-from native_agent_profiles import role_registry, BUDGET_CEILINGS
+from native_agent_profiles import role_registry, BUDGET_CEILINGS, configured_budgets
 from native_team_artifacts import fingerprint,_paths,_no_symlinks
 from storage import runtime_lock
 from chat_mailbox import _json,_private
@@ -34,12 +34,14 @@ def common_dir(path):
     return str((path/value).resolve()) if not value.is_absolute() else str(value.resolve())
 def sha(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
-def registry():
+def registry(project=None, *, cloud_concurrency=None, executor_limit=None):
+    budgets, _ = configured_budgets(project, requested=cloud_concurrency,
+                                    executor_limit=executor_limit)
     return {'roles': role_registry(),
             'backends': {'cloud': {'dispatch_enabled': True, 'provider': 'explicit-role-model'},
                          'local': {'dispatch_enabled': False,
                                    'reason': 'Separate approval and real API verification required'}},
-            'budgets': deepcopy(BUDGET_CEILINGS)}
+            'budgets': budgets}
 
 class NativeTeam:
     def __init__(self,root,clock=time.time):
