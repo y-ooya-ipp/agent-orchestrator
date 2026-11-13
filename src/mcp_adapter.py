@@ -409,7 +409,7 @@ class Adapter:
                     if name == 'codex_pipeline_tick':
                         raise Invalid('Shared pipeline tick is unavailable to per-user callers')
                     if name in ('codex_thread_start', 'codex_threads_list', 'codex_events',
-                                'codex_capabilities'):
+                                'codex_capabilities', 'codex_models_list'):
                         if (not self.events_enabled or self.notification_runtime is None
                                 or getattr(self.notification_runtime, 'outbox', None) is None):
                             raise Invalid('Authenticated task ACL unavailable')

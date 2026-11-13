@@ -24,6 +24,8 @@ class Peer:
     def __init__(self, workspace):
         self.workspace, self.calls, self.threads = workspace, [], {}
         self.failure, self.account, self.scope = {}, 'chatgpt', 'readOnly'
+        self.models = [copy.deepcopy(MODEL)]
+        self.effort_echo = 'requested'
         self.client = ProtocolClient(self)
         self.client.initialize()
 
@@ -37,12 +39,15 @@ class Peer:
             return {'id': request['id'], 'error': {'code': -32000, 'message': 'private refusal'}}
         if method == 'initialize': result = INITIALIZE
         elif method == 'account/read': result = {'requiresOpenaiAuth': True, 'account': {'type': self.account, 'email': 'never-export@example.invalid'}}
-        elif method == 'model/list': result = {'data': [MODEL], 'nextCursor': None}
+        elif method == 'model/list': result = {'data': copy.deepcopy(self.models), 'nextCursor': None}
         elif method in ('thread/start', 'thread/resume'):
             ident = params.get('threadId', 'remote-' + str(len(self.threads)))
             self.threads.setdefault(ident, {'id': ident, 'turns': [], 'status': {'type': 'idle'}})
             result = {'thread': self.threads[ident], 'model': params['model'], 'cwd': self.workspace,
                       'modelProvider': 'openai', 'approvalPolicy': 'on-request', 'approvalsReviewer': 'user', 'sandbox': {'type': self.scope}}
+            if self.effort_echo == 'requested':
+                result['reasoningEffort'] = params.get('config', {}).get('model_reasoning_effort')
+            elif self.effort_echo != 'absent': result['reasoningEffort'] = self.effort_echo
         elif method == 'turn/start':
             thread = self.threads[params['threadId']]
             turn = {'id': 'turn-' + str(len(thread['turns'])), 'status': 'inProgress', 'items': []}
@@ -94,7 +99,8 @@ class PipelineTests(unittest.TestCase):
 
     def test_capabilities_no_generation_and_no_account_identity(self):
         result = self.call('capabilities')
-        self.assertEqual(result['models'], [{'model': 'offline-model', 'available': True}])
+        self.assertEqual(result['models'][0]['model'], 'offline-model')
+        self.assertTrue(result['models'][0]['available'])
         self.assertNotIn('email', json.dumps(result))
         self.assertNotIn(str(self.workspace), json.dumps(result))
         self.assertEqual(self.peer.count('turn/start'), 0)
@@ -501,7 +507,7 @@ class PipelineTests(unittest.TestCase):
         enabled = tool_definitions(local_llm=True, local_models=True, chat_mailbox=True, codex_pipeline=True)
         self.assertEqual(len(old), 11)
         self.assertEqual(enabled[:11], old)
-        self.assertEqual(len(enabled), 26)
+        self.assertEqual(len(enabled), 27)
         self.assertEqual({tool['name'] for tool in enabled[11:]}, set(TOOLS))
         with patch('mcp_adapter.subprocess.Popen', side_effect=AssertionError('no process')):
             adapter = Adapter(self.root)
@@ -536,4 +542,423 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(self.call('capabilities')['chat_wake'])
 
 
-if __name__ == '__main__': unittest.main()
+    def test_models_list_has_same_authenticated_metadata_prerequisite_as_capabilities(self):
+        from local_principal import current_local_principal
+        from types import SimpleNamespace
+        adapter = Adapter(self.root,allow_codex_pipeline=True,pipeline=self.pipeline)
+        self.addCleanup(adapter.audit.close)
+        principal = current_local_principal()
+        before = len(self.peer.calls)
+        for tool in ['codex_capabilities','codex_models_list']:
+            result = adapter.call_tool(tool,{},1,request_principal=principal)
+            self.assertTrue(result['isError'])
+            self.assertEqual(result['structuredContent']['data']['code'],'NOT_AUTHORIZED')
+        self.assertEqual(len(self.peer.calls),before)
+        # Once the exact existing prerequisite is satisfied, metadata remains
+        # read-only and introduces no task/thread ownership import.
+        adapter.events_enabled = True
+        adapter.notification_runtime = SimpleNamespace(outbox=object())
+        result = adapter.call_tool('codex_models_list',{},2,request_principal=principal)
+        self.assertFalse(result['isError'])
+        self.assertEqual(result['structuredContent']['data']['catalog']['status'],'observed')
+        self.assertEqual(self.peer.count('turn/start'),0)
+
+    def test_build_uses_shared_inspected_version_gate_for_0167_without_generation(self):
+        path = self.root/'codex-pipeline-policy.json'
+        path.write_text(json.dumps(self.policy));path.chmod(0o600)
+        peer=self.peer
+        class Transport:
+            def __init__(self):self.closed=False
+            def __call__(self,request,timeout_s):return peer(request,timeout_s)
+            def bind_client(self,client):self.client=client
+            def start(self):pass
+            def close(self):self.closed=True
+        transport=Transport()
+        bundle=type('Bundle',(),{'sha256':'a'*64})()
+        with patch('common_policy.load_project_policy',return_value=bundle), \
+                patch('common_policy.developer_instructions',return_value='Fixed policy'), \
+                patch.dict(INITIALIZE,{'userAgent':'codex_work_desktop/0.167.0 (Linux)'}):
+            pipeline=build_pipeline(self.root,PROJECT,transport_factory=lambda:transport)
+        self.addCleanup(transport.close)
+        self.assertEqual(pipeline.capabilities()['catalog']['status'],'observed')
+        self.assertEqual(self.peer.count('turn/start'),0)
+
+
+
+
+class CatalogEffortTests(unittest.TestCase):
+    setUp = PipelineTests.setUp
+    tearDown = PipelineTests.tearDown
+    new_pipeline = PipelineTests.new_pipeline
+    call = PipelineTests.call
+    start = PipelineTests.start
+    submit = PipelineTests.submit
+    complete = PipelineTests.complete
+
+    def test_fresh_catalog_projects_selection_metadata_without_descriptions(self):
+        extra = copy.deepcopy(MODEL)
+        extra.update(id='other-model', model='other-model', displayName='Other', isDefault=False)
+        self.peer.models.append(extra)
+        result = self.call('capabilities')
+        row = result['models'][0]
+        self.assertEqual(row['availability'], 'observed')
+        self.assertEqual(row['default_reasoning_effort'], 'medium')
+        self.assertEqual(row['supported_reasoning_efforts'], ['medium', 'high'])
+        self.assertEqual(row['display_name'], 'Fixture')
+        self.assertFalse(result['model_execution_verified'])
+        other = result['provider_catalog']['models'][1]
+        self.assertFalse(other['operator_allowed'])
+        self.assertFalse(other['selectable'])
+        self.assertNotIn('description', json.dumps(result))
+        self.assertEqual(self.peer.count('turn/start'), 0)
+
+    def test_hidden_absent_and_discovery_failure_do_not_claim_availability(self):
+        self.peer.models[0]['hidden'] = True
+        hidden = self.call('capabilities')['models'][0]
+        self.assertFalse(hidden['available'])
+        self.assertEqual(hidden['availability'], 'unavailable')
+        self.peer.models = []
+        self.assertFalse(self.call('capabilities')['models'][0]['available'])
+        self.peer.failure['model/list'] = TimeoutError('private authentication detail')
+        result = self.call('capabilities')
+        self.assertEqual(result['catalog']['status'], 'unknown')
+        self.assertEqual(result['models'][0]['availability'], 'unknown')
+        self.assertFalse(result['models'][0]['available'])
+        self.assertNotIn('private authentication', json.dumps(result))
+
+    def test_malformed_default_and_duplicate_models_fail_closed(self):
+        for change in ('effort', 'default', 'duplicate', 'label', 'id'):
+            with self.subTest(change=change):
+                self.peer.models = [copy.deepcopy(MODEL)]
+                row = self.peer.models[0]
+                if change == 'effort': row['supportedReasoningEfforts'].append(copy.deepcopy(row['supportedReasoningEfforts'][0]))
+                if change == 'default': row['defaultReasoningEffort'] = 'not-advertised'
+                if change == 'duplicate': self.peer.models.append(copy.deepcopy(row))
+                if change == 'label': row['displayName'] = 'bad\nlabel'
+                if change == 'id': row['id'] = '../bad'
+                result = self.call('capabilities')
+                self.assertEqual(result['catalog']['status'], 'unknown')
+                self.assertFalse(result['models'][0]['available'])
+        self.assertEqual(self.peer.count('thread/start'), 0)
+
+    def test_explicit_and_omitted_effort_are_persisted_and_transported(self):
+        thread = self.call('thread_start', workspace='fixture', model='offline-model',
+            reasoning_effort='high', request_key='start')['thread_id']
+        task = self.call('task_submit', thread_id=thread, prompt='Synthetic public input', request_key='task')
+        self.assertEqual(task['reasoning_effort'], 'medium')
+        self.assertEqual(task['reasoning_effort_source'], 'provider_default')
+        self.assertIsNone(task['requested_reasoning_effort'])
+        start = next(p for m, p in self.peer.calls if m == 'thread/start')
+        turn = next(p for m, p in self.peer.calls if m == 'turn/start')
+        self.assertEqual(start['config'], {'model_reasoning_effort': 'high'})
+        self.assertEqual(turn['effort'], 'medium')
+        self.assertEqual(task['reasoning_effort_evidence']['turn_transport'], 'acknowledged')
+        self.assertFalse(task['reasoning_effort_evidence']['actual_execution_verified'])
+        self.assertEqual(task['reasoning_effort_evidence']['turn_provider_echo'], 'not_available')
+
+    def test_explicit_unsupported_effort_rejected_before_generation(self):
+        with self.assertRaisesRegex(PipelineError, 'REASONING_EFFORT_NOT_SUPPORTED'):
+            self.call('thread_start', workspace='fixture', model='offline-model', reasoning_effort='max', request_key='bad')
+        thread = self.start()
+        result = self.call('task_submit', thread_id=thread, prompt='No turn', reasoning_effort='max', request_key='bad-task')
+        self.assertEqual(result['state'], 'BLOCKED')
+        self.assertEqual(result['reason_code'], 'REASONING_EFFORT_NOT_SUPPORTED')
+        self.assertEqual(self.peer.count('turn/start'), 0)
+
+    def test_retry_precedes_discovery_and_retains_original_default_and_fingerprint(self):
+        thread = self.start()
+        task = self.call('chat_store', thread_id=thread, prompt='Fixed input', request_key='store')
+        original = self.pipeline._mutate(lambda s: copy.deepcopy(s['ops']['store']))
+        self.peer.models[0]['defaultReasoningEffort'] = 'high'
+        duplicate = self.call('chat_store', thread_id=thread, prompt='Fixed input', request_key='store')
+        self.assertEqual(duplicate['reasoning_effort'], 'medium')
+        before = len(self.peer.calls)
+        self.peer.failure['model/list'] = TimeoutError()
+        self.assertEqual(self.start(), thread)
+        self.assertEqual(self.call('chat_store', thread_id=thread, prompt='Fixed input', request_key='store')['id'], task['id'])
+        self.assertEqual(len(self.peer.calls), before)
+        self.assertEqual(self.pipeline._mutate(lambda s:s['ops']['store']), original)
+        with self.assertRaisesRegex(PipelineError, 'REQUEST_KEY_CONFLICT'):
+            self.call('chat_store', thread_id=thread, prompt='Fixed input', reasoning_effort='medium', request_key='store')
+
+    def test_queued_effort_stays_fixed_when_provider_default_changes(self):
+        thread = self.start()
+        task = self.call('chat_store', thread_id=thread, prompt='Fixed', request_key='task')
+        self.peer.models[0]['defaultReasoningEffort'] = 'high'
+        self.call('chat_queue', task_id=task['id'], request_key='queue')
+        self.call('pipeline_tick')
+        turn = next(p for m, p in self.peer.calls if m == 'turn/start')
+        self.assertEqual(turn['effort'], 'medium')
+
+    def test_changed_supported_effort_blocks_queued_task(self):
+        thread = self.start()
+        task = self.call('chat_store', thread_id=thread, prompt='Fixed', request_key='task')
+        self.call('chat_queue', task_id=task['id'], request_key='queue')
+        self.peer.models[0].update(defaultReasoningEffort='high', supportedReasoningEfforts=[
+            {'reasoningEffort':'high', 'description':'Fixture'}])
+        self.call('pipeline_tick')
+        current = self.call('task_get', task_id=task['id'])
+        self.assertEqual(current['state'], 'BLOCKED')
+        self.assertEqual(current['reason_code'], 'REASONING_EFFORT_NOT_SUPPORTED')
+        self.assertEqual(current['reasoning_effort'], 'medium')
+        self.assertEqual(self.peer.count('turn/start'), 0)
+
+    def test_legacy_input_is_blocked_without_history_relabel_or_catalogue(self):
+        thread = self.start()
+        task = self.call('chat_store', thread_id=thread, prompt='Legacy', request_key='task')
+        self.call('chat_queue', task_id=task['id'], request_key='queue')
+        def legacy(s):
+            row = s['tasks'][task['id']]
+            for k in list(row):
+                if k.startswith(('reasoning_effort', 'requested_reasoning_effort', 'selection_')): del row[k]
+            return copy.deepcopy(s['ops'])
+        ops = self.pipeline._mutate(legacy)
+        before = len(self.peer.calls)
+        self.call('pipeline_tick')
+        current = self.call('task_get', task_id=task['id'])
+        self.assertEqual(current['state'], 'BLOCKED')
+        self.assertEqual(current['reason_code'], 'LEGACY_REASONING_EFFORT_MISSING')
+        self.assertNotIn('reasoning_effort', current)
+        self.assertEqual(self.pipeline._mutate(lambda s:s['ops']), ops)
+        self.assertEqual(len(self.peer.calls), before)
+
+    def test_unknown_legacy_execution_keeps_held_slot(self):
+        thread = self.start()
+        task = self.submit(thread)
+        def legacy(s):
+            s['tasks'][task['id']].pop('reasoning_effort')
+            s['tasks'][task['id']]['state'] = 'UNKNOWN'
+        self.pipeline._mutate(legacy)
+        self.call('pipeline_tick')
+        state = self.pipeline._mutate(lambda s:copy.deepcopy(s))
+        self.assertEqual(state['threads'][thread]['active_task'], task['id'])
+        self.assertNotIn('reasoning_effort', state['tasks'][task['id']])
+        self.assertEqual(self.peer.count('turn/start'), 1)
+
+    def test_thread_effort_echo_absence_is_not_execution_proof(self):
+        self.peer.effort_echo = 'absent'
+        thread = self.start()
+        row = self.pipeline._mutate(lambda s:s['threads'][thread])
+        self.assertEqual(row['context_reasoning_effort_evidence']['echo_status'], 'not_reported')
+        self.assertFalse(row['context_reasoning_effort_evidence']['actual_execution_verified'])
+        self.submit(thread)
+        self.assertEqual(self.peer.count('turn/start'), 1)
+
+    def test_effective_thread_echo_mismatch_is_unknown_and_never_runs(self):
+        self.peer.effort_echo = 'high'
+        result = self.call('thread_start', workspace='fixture', model='offline-model', request_key='bad-echo')
+        self.assertEqual(result['status'], 'UNKNOWN')
+        self.assertEqual(self.peer.count('turn/start'), 0)
+        self.assertTrue(self.call('thread_start', workspace='fixture', model='offline-model', request_key='bad-echo')['duplicate'])
+        self.assertEqual(self.peer.count('thread/start'), 1)
+
+    def test_resume_transports_fixed_effort_and_checks_echo_before_turn(self):
+        thread = self.start()
+        task = self.call('chat_store', thread_id=thread, prompt='Resume', reasoning_effort='high', request_key='task')
+        self.call('chat_queue', task_id=task['id'], request_key='queue')
+        self.pipeline.loaded.clear()
+        self.peer.effort_echo = 'medium'
+        self.call('pipeline_tick')
+        resume = next(p for m, p in self.peer.calls if m == 'thread/resume')
+        self.assertEqual(resume['config'], {'model_reasoning_effort':'high'})
+        self.assertEqual(self.call('task_get', task_id=task['id'])['reason_code'], 'RESUME_REASONING_EFFORT_MISMATCH')
+        self.assertEqual(self.peer.count('turn/start'), 0)
+
+    def test_provider_catalog_paging_is_bounded_and_unknown_never_selectable(self):
+        self.peer.models = []
+        for n in range(41):
+            row = copy.deepcopy(MODEL)
+            row.update(id='model-'+str(n), model='model-'+str(n), isDefault=False)
+            self.peer.models.append(row)
+        first = self.call('models_list', limit=20)
+        second = self.call('models_list', limit=20, cursor=first['next_cursor'])
+        third = self.call('models_list', limit=20, cursor=second['next_cursor'])
+        self.assertEqual([len(x['models']) for x in [first, second, third]], [20,20,1])
+        self.assertIsNone(third['next_cursor'])
+        self.assertTrue(all(not row['selectable'] for row in first['models']))
+        self.assertLess(len(json.dumps(first).encode()), 64*1024)
+        self.peer.models[0]['displayName'] = 'Changed'
+        with self.assertRaisesRegex(PipelineError, 'LIST_SNAPSHOT_CHANGED'):
+            self.call('models_list', cursor=first['next_cursor'])
+
+    def test_catalog_pagination_rejects_repeated_cursors_and_cross_page_duplicates(self):
+        original = self.peer.client.request
+        for duplicate in [True,False]:
+            with self.subTest(duplicate=duplicate):
+                count = 0
+                def request(method, params):
+                    nonlocal count
+                    if method != 'model/list': return original(method, params)
+                    count += 1
+                    row = copy.deepcopy(MODEL)
+                    if not duplicate: row.update(id='row-'+str(count), model='row-'+str(count))
+                    return {'data':[row], 'nextCursor':'repeated'}
+                with patch.object(self.peer.client, 'request', side_effect=request):
+                    result = self.call('capabilities')
+                self.assertEqual(result['catalog']['status'], 'unknown')
+                self.assertLessEqual(count, 4)
+        self.assertEqual(self.peer.count('turn/start'), 0)
+
+
+class EffortStorageBoundaryTests(unittest.TestCase):
+    setUp = PipelineTests.setUp
+    tearDown = PipelineTests.tearDown
+    new_pipeline = PipelineTests.new_pipeline
+    call = PipelineTests.call
+    start = PipelineTests.start
+
+    def test_explicit_store_is_offline_and_keeps_intent_without_entitlement_claim(self):
+        thread = self.start()
+        before = len(self.peer.calls)
+        self.peer.failure['account/read'] = TimeoutError('secret transport detail')
+        task = self.call('chat_store', thread_id=thread, prompt='Keep intent', reasoning_effort='high', request_key='store')
+        self.assertEqual(task['state'], 'STORED')
+        self.assertEqual(task['reasoning_effort_source'], 'explicit')
+        self.assertIsNone(task['selection_catalog_sha256'])
+        self.call('chat_queue', task_id=task['id'], request_key='queue')
+        self.assertEqual(len(self.peer.calls), before)
+        self.call('pipeline_tick')
+        current = self.call('task_get', task_id=task['id'])
+        self.assertEqual(current['state'], 'BLOCKED')
+        self.assertEqual(current['reason_code'], 'MODEL_CATALOG_UNKNOWN')
+        self.assertEqual(current['reasoning_effort'], 'high')
+        self.assertEqual(self.peer.count('turn/start'), 0)
+
+    def test_new_omission_fails_closed_without_creating_partial_task(self):
+        thread = self.start()
+        self.peer.failure['model/list'] = TimeoutError('private')
+        before = self.pipeline._mutate(lambda s: copy.deepcopy(s))
+        with self.assertRaisesRegex(PipelineError, 'MODEL_CATALOG_UNKNOWN'):
+            self.call('chat_store', thread_id=thread, prompt='No guessed default', request_key='task')
+        self.assertEqual(self.pipeline._mutate(lambda s:s), before)
+        self.assertEqual(self.peer.count('turn/start'), 0)
+
+    def test_unusual_advertised_effort_is_preserved_not_mapped_to_native_enum(self):
+        effort = 'custom strength/v2'
+        self.peer.models[0]['supportedReasoningEfforts'].append({'reasoningEffort':effort, 'description':'Fixture'})
+        self.peer.models[0]['defaultReasoningEffort'] = effort
+        thread = self.start()
+        result = self.call('task_submit', thread_id=thread, prompt='Exact raw effort', request_key='task')
+        self.assertEqual(result['reasoning_effort'], effort)
+        turn = next(p for m, p in self.peer.calls if m == 'turn/start')
+        self.assertEqual(turn['effort'], effort)
+
+    def test_changed_immutable_selection_is_blocked_before_discovery(self):
+        thread = self.start()
+        task = self.call('chat_store', thread_id=thread, prompt='Fixed', request_key='task')
+        self.call('chat_queue', task_id=task['id'], request_key='queue')
+        self.pipeline._mutate(lambda s:s['tasks'][task['id']].update(reasoning_effort='high'))
+        before = len(self.peer.calls)
+        self.call('pipeline_tick')
+        current = self.call('task_get', task_id=task['id'])
+        self.assertEqual(current['reason_code'], 'IMMUTABLE_MODEL_SELECTION_CHANGED')
+        self.assertEqual(len(self.peer.calls), before)
+
+    def test_legacy_stored_input_rejected_without_mutating_history(self):
+        thread = self.start()
+        task = self.call('chat_store', thread_id=thread, prompt='Legacy stored', request_key='task')
+        self.pipeline._mutate(lambda s:s['tasks'][task['id']].pop('reasoning_effort'))
+        before = self.pipeline._mutate(lambda s:copy.deepcopy(s))
+        with self.assertRaisesRegex(PipelineError, 'LEGACY_REASONING_EFFORT_MISSING'):
+            self.call('chat_queue', task_id=task['id'], request_key='queue')
+        self.assertEqual(self.pipeline._mutate(lambda s:s), before)
+
+    def test_null_effort_echo_is_distinct_from_matched_and_does_not_prove_execution(self):
+        self.peer.effort_echo = None
+        thread = self.start()
+        self.pipeline.loaded.clear()
+        task = self.call('task_submit',thread_id=thread,prompt='Null receipt',request_key='task')
+        for row in [self.pipeline._mutate(lambda s:s['threads'][thread]),task]:
+            evidence = row['context_reasoning_effort_evidence']
+            self.assertEqual(evidence['echo_status'],'not_reported')
+            self.assertIsNone(evidence['provider_echo'])
+            self.assertFalse(evidence['actual_execution_verified'])
+        self.assertEqual(task['state'],'RUNNING')
+
+    def test_catalog_four_page_bound_with_no_fifth_read(self):
+        original = self.peer.client.request
+        pages = 0
+        def request(method, params):
+            nonlocal pages
+            if method != 'model/list': return original(method,params)
+            pages += 1
+            return {'data': [], 'nextCursor':'page-'+str(pages)}
+        with patch.object(self.peer.client, 'request', side_effect=request):
+            result = self.call('capabilities')
+        self.assertEqual(pages,4)
+        self.assertEqual(result['catalog']['code'],'MODEL_CATALOG_BOUND')
+        self.assertFalse(result['models'][0]['available'])
+
+    def test_complete_large_projection_stays_under_wire_budget_with_explicit_truncation(self):
+        self.peer.models = []
+        for n in range(30):
+            row = copy.deepcopy(MODEL)
+            row.update(id=('model'+str(n)).ljust(160,'x'),model=('model'+str(n)).ljust(160,'x'),
+                displayName='\u00e9'*80, isDefault=False)
+            row['supportedReasoningEfforts'] = [
+                {'reasoningEffort':(str(k)+'\u00e9'*31), 'description':'Fixture'} for k in range(16)]
+            row['defaultReasoningEffort'] = row['supportedReasoningEfforts'][0]['reasoningEffort']
+            self.peer.models.append(row)
+        policy = copy.deepcopy(self.policy)
+        policy['models'] = [row['model'] for row in self.peer.models[:8]]
+        self.pipeline.policy = policy
+        for tool in ['capabilities','models_list']:
+            result = self.call(tool)
+            self.assertLessEqual(len(json.dumps(result,ensure_ascii=True).encode()),20*1024)
+            page = result.get('provider_catalog',result)
+            self.assertTrue(page['truncated'])
+            self.assertIsNotNone(page['next_cursor'])
+            self.assertGreater(len(page['models']),0)
+
+
+    def test_exact_duplicated_mcp_wire_envelope_fits_64k_for_escaped_metadata(self):
+        from mcp_adapter import REQUEST_PROTOCOL, VERSION_META, CAPABILITIES_META
+        from mcp_http_transport import MAX_HTTP_BODY
+        self.peer.models = []
+        for n in range(40):
+            row = copy.deepcopy(MODEL)
+            row.update(id=('model'+str(n)).ljust(160,'x'),model=('model'+str(n)).ljust(160,'x'),
+                displayName='"\\'*80, isDefault=False)
+            row['supportedReasoningEfforts'] = [
+                {'reasoningEffort':str(k)+'"\\'*30, 'description':'Fixture'} for k in range(16)]
+            row['defaultReasoningEffort'] = row['supportedReasoningEfforts'][0]['reasoningEffort']
+            self.peer.models.append(row)
+        self.pipeline.policy['models'] = [row['model'] for row in self.peer.models[:8]]
+        adapter = Adapter(self.root,allow_codex_pipeline=True,pipeline=self.pipeline)
+        self.addCleanup(adapter.audit.close)
+        for tool in ['codex_capabilities','codex_models_list']:
+            reply = adapter.handle({'jsonrpc':'2.0','id':'q'*128,'method':'tools/call','params':{
+                'name':tool,'arguments':{},'_meta':{VERSION_META:REQUEST_PROTOCOL,CAPABILITIES_META:{}}}})
+            self.assertNotIn('error',reply)
+            self.assertFalse(reply['result']['isError'])
+            wire = json.dumps(reply,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode()
+            self.assertLess(len(wire),MAX_HTTP_BODY)
+            body = reply['result']['structuredContent']
+            self.assertEqual(json.loads(reply['result']['content'][0]['text']),body)
+            self.assertLessEqual(len(json.dumps(body['data'],ensure_ascii=True).encode()),20*1024)
+            page = body['data'].get('provider_catalog',body['data'])
+            self.assertTrue(page['truncated'])
+            self.assertTrue(page['models'])
+
+
+    def test_large_legacy_listing_uses_existing_pagination_instead_of_oversized_wire(self):
+        self.pipeline.policy['max_tasks'] = 32
+        thread = self.start()
+        for n in range(32):
+            self.call('chat_store',thread_id=thread,prompt='Stored '+str(n),
+                reasoning_effort='medium',request_key='large-'+str(n))
+        result = self.call('threads_list')
+        self.assertIsNotNone(result['next_cursor'])
+        self.assertLess(len(json.dumps(result).encode()),16000)
+        seen = set()
+        while True:
+            rows = result['threads']+result['tasks']
+            self.assertFalse(seen.intersection(row['id'] for row in rows))
+            seen.update(row['id'] for row in rows)
+            if result['next_cursor'] is None: break
+            result = self.call('threads_list',cursor=result['next_cursor'])
+        self.assertEqual(len(seen),33)
+
+
+if __name__ == '__main__':
+    unittest.main()

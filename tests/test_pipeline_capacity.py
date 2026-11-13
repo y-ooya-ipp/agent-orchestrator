@@ -263,8 +263,11 @@ class ConcurrentGatewayTests(unittest.TestCase):
     def test_rejected_catalog_is_blocked_without_implicit_reexecution(self):
         f=self.f;t=f.start();f.submit(t);f.complete(t);f.gateway.pump()
         for i,method in enumerate(['account/read','model/list']):
+            task=f.call('chat_store',thread_id=t,prompt='Stored before catalog failure',request_key='catalog-store-'+str(i))
+            f.call('chat_queue',task_id=task['id'],request_key='catalog-queue-'+str(i))
             before=f.peer.count(method);f.peer.failure[method]='refused'
-            task=f.submit(t,key='catalog-rejected-'+str(i))
+            f.gateway.pump()
+            task=f.call('task_get',task_id=task['id'])
             self.assertEqual(task['state'],'BLOCKED');self.assertEqual(task['reason_code'],'CATALOG_REJECTED')
             del f.peer.failure[method];f.gateway.pump()
             self.assertEqual(f.peer.count(method),before+1);self.assertEqual(f.peer.count('turn/start'),1)

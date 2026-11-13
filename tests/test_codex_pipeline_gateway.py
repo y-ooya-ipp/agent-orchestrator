@@ -325,7 +325,10 @@ class GatewayTests(unittest.TestCase):
             nonlocal pages
             reply=self.peer(message,timeout_s)
             if message['method']=='model/list':
-                pages+=1;reply['result']['nextCursor']='next-page' if pages<4 else None
+                pages+=1
+                # Distinct catalog pages, not four duplicated model entries.
+                if pages>1: reply['result']['data']=[]
+                reply['result']['nextCursor']='page-'+str(pages) if pages<4 else None
             return reply
         def factory(binary):
             transport=FakeOwned(exchange);self.transports.append(transport);return transport
@@ -356,8 +359,12 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.peer.count('turn/start'), 1)
 
     def test_changed_auth_blocks_queued_task_once_without_automatic_relaunch(self):
-        thread = self.start(); self.peer.account = 'apiKey'
-        task = self.submit(thread)
+        thread = self.start()
+        task = self.call('chat_store',thread_id=thread,prompt='Queued before auth change',request_key='store')
+        self.call('chat_queue',task_id=task['id'],request_key='queue')
+        self.peer.account = 'apiKey'
+        self.gateway.pump()
+        task = self.call('task_get',task_id=task['id'])
         self.assertEqual(task['state'], 'BLOCKED')
         self.assertFalse(task['execution_started'])
         count = len(self.transports)
@@ -369,9 +376,12 @@ class GatewayTests(unittest.TestCase):
 
     def test_actual_runner_lease_excludes_pipeline_turn(self):
         thread = self.start()
+        task = self.call('chat_store',thread_id=thread,prompt='Stored with fresh default',request_key='store')
+        self.call('chat_queue',task_id=task['id'],request_key='queue')
         self.gateway.release_idle(force=True)
         with lease(self.root / 'runner.lock', shared=True):
-            task = self.submit(thread)
+            self.gateway.pump()
+            task = self.call('task_get',task_id=task['id'])
             self.assertEqual(task['state'], 'QUEUED')
             self.assertEqual(self.peer.count('turn/start'), 0)
         self.gateway.pump()
@@ -519,4 +529,46 @@ class GatewayTests(unittest.TestCase):
         self.assertFalse(transport.cleanup_confirmed)
 
 
-if __name__ == '__main__': unittest.main()
+
+
+class EffortGatewayBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        fixture=GatewayTests('test_metadata_session_closes_and_releases_runner_budget')
+        fixture.setUp();self.addCleanup(fixture.doCleanups);self.f=fixture
+
+    def test_explicit_intent_can_be_stored_and_queued_while_real_runner_lease_is_held(self):
+        f=self.f;thread=f.start();f.gateway.release_idle(force=True)
+        before=len(f.peer.calls)
+        with lease(f.root/'runner.lock',shared=True):
+            task=f.call('task_submit',thread_id=thread,prompt='Explicit offline intent',
+                reasoning_effort='high',request_key='explicit-while-busy')
+            self.assertEqual(task['state'],'QUEUED')
+            self.assertEqual(task['reasoning_effort'],'high')
+            self.assertIsNone(task['selection_catalog_sha256'])
+            self.assertEqual(len(f.peer.calls),before)
+        f.gateway.pump()
+        self.assertEqual(f.peer.count('turn/start'),1)
+        turn=next(args for method,args in f.peer.calls if method=='turn/start')
+        self.assertEqual(turn['effort'],'high')
+
+    def test_new_effort_survives_proxy_and_daemon_routing(self):
+        f=self.f
+        arguments={'thread_id':'10000000-0000-4000-8000-000000000091',
+            'prompt':'Fixture','reasoning_effort':'provider custom/value','request_key':'route'}
+        proxy=DaemonPipelineProxy(f.root)
+        with patch('codex_host.request',return_value={'state':'STORED'}) as request:
+            self.assertEqual(proxy.dispatch('codex_chat_store',arguments),{'state':'STORED'})
+        self.assertEqual(request.call_args.args[2],{'tool':'codex_chat_store','arguments':arguments})
+        daemon=Daemon.__new__(Daemon);daemon.allow_codex_pipeline=True;daemon.pipeline=Mock()
+        daemon.handle('codex_pipeline',{'tool':'codex_chat_store','arguments':arguments})
+        daemon.pipeline.dispatch.assert_called_once_with('codex_chat_store',arguments)
+        with self.assertRaisesRegex(PipelineError,'INVALID_REASONING_EFFORT'):
+            proxy.dispatch('codex_chat_store',{**arguments,'reasoning_effort':'bad\nvalue'})
+        daemon.pipeline.dispatch.reset_mock()
+        result=daemon.handle('codex_pipeline',{'tool':'codex_chat_store','arguments':{**arguments,'reasoning_effort':'bad\nvalue'}})
+        self.assertEqual(result['code'],'INVALID_REASONING_EFFORT')
+        daemon.pipeline.dispatch.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main()

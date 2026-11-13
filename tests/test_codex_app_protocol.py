@@ -19,7 +19,9 @@ INITIALIZE = {"codexHome": "/offline/codex", "platformFamily": "unix",
               "platformOs": "linux", "userAgent": "codex/0.165.0"}
 MODEL = {"id": "offline-model", "model": "offline-model", "displayName": "Fixture",
          "description": "Not a live model", "hidden": False, "isDefault": True,
-         "defaultReasoningEffort": "medium", "supportedReasoningEfforts": []}
+         "defaultReasoningEffort": "medium", "supportedReasoningEfforts": [
+             {"reasoningEffort": "medium", "description": "Fixture default"},
+             {"reasoningEffort": "high", "description": "Fixture high"}]}
 THREAD = {"id": "thread-1", "cliVersion": "0.165.0", "createdAt": 0, "updatedAt": 0,
           "cwd": "/offline", "ephemeral": False, "modelProvider": "openai", "preview": "",
           "projectId": None, "sessionId": "session-1", "source": "appServer",
@@ -340,6 +342,70 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(ProtocolError):
                 ProtocolClient(**kwargs)
 
+
+
+class ReasoningCatalogProtocolTests(unittest.TestCase):
+    client = ProtocolTests.client
+
+    def test_only_fixed_reasoning_config_shape_is_transportable(self):
+        client,peer = self.client()
+        for method,args in [('thread/start',{}),('thread/resume',{'threadId':'thread-1'})]:
+            client.request(method,{**args,'config':{'model_reasoning_effort':'provider custom/value'}})
+            sent=peer.calls[-1][0]['params']
+            self.assertEqual(sent['config'],{'model_reasoning_effort':'provider custom/value'})
+            before=len(peer.calls)
+            for config in [None,{}, {'model_reasoning_effort':None},
+                {'model_reasoning_effort':'medium','model_provider':'other'},
+                {'model_reasoning_effort':'bad\nvalue'}, {'model_reasoning_effort':'x'*65}]:
+                with self.subTest(config=config),self.assertRaises(ProtocolError):
+                    client.request(method,{**args,'config':config})
+            self.assertEqual(len(peer.calls),before)
+
+    def test_turn_effort_is_exact_raw_provider_string_and_not_reasoning_effort_key(self):
+        client,peer=self.client()
+        body={'threadId':'thread-1','input':[{'type':'text','text':'Fixture'}]}
+        client.request('turn/start',{**body,'effort':'provider custom/value'})
+        self.assertEqual(peer.calls[-1][0]['params']['effort'],'provider custom/value')
+        before=len(peer.calls)
+        for value in ['',None,True,'bad\nvalue','x'*65]:
+            with self.subTest(value=value),self.assertRaises(ProtocolError):
+                client.request('turn/start',{**body,'effort':value})
+        with self.assertRaises(ProtocolError):client.request('turn/start',{**body,'reasoning_effort':'medium'})
+        self.assertEqual(len(peer.calls),before)
+
+    def test_catalog_rejects_malformed_entries_options_bounds_and_page_duplicates(self):
+        import copy
+        for change in ['missing','option-shape','default','empty-options','duplicate-option',
+                       'option-limit','effort-control','display-bound','duplicate-model','page-bound','cursor-bound']:
+            with self.subTest(change=change):
+                client,peer=self.client()
+                row=copy.deepcopy(MODEL);page={'data':[row],'nextCursor':None}
+                if change=='missing':row.pop('defaultReasoningEffort')
+                if change=='option-shape':row['supportedReasoningEfforts'][0].pop('description')
+                if change=='default':row['defaultReasoningEffort']='not advertised'
+                if change=='empty-options':row['supportedReasoningEfforts']=[]
+                if change=='duplicate-option':row['supportedReasoningEfforts'].append(copy.deepcopy(row['supportedReasoningEfforts'][0]))
+                if change=='option-limit':row['supportedReasoningEfforts']=[{'reasoningEffort':str(k),'description':''} for k in range(17)]
+                if change=='effort-control':row['supportedReasoningEfforts'][0]['reasoningEffort']='bad\nvalue'
+                if change=='display-bound':row['displayName']='x'*161
+                if change=='duplicate-model':page['data'].append(copy.deepcopy(row))
+                if change=='page-bound':page['data']=[row]*101
+                if change=='cursor-bound':page['nextCursor']='x'*513
+                peer.answer=lambda message:{'id':message['id'],'result':page}
+                with self.assertRaises(ProtocolUnknown):client.model_catalog()
+
+    def test_thread_effort_echo_accepts_missing_null_or_string_but_rejects_malformed(self):
+        import copy
+        for method in ['thread/start','thread/resume']:
+            for echo in [None,'medium',True,{},'bad\nvalue','x'*65]:
+                with self.subTest(method=method,echo=echo):
+                    client,peer=self.client()
+                    result=copy.deepcopy(THREAD_RESULT);result['reasoningEffort']=echo
+                    peer.answer=lambda message:{'id':message['id'],'result':result}
+                    if echo is None or echo=='medium':
+                        self.assertEqual(client.request(method,{'threadId':'thread-1'} if method=='thread/resume' else {})['reasoningEffort'],echo)
+                    else:
+                        with self.assertRaises(ProtocolUnknown):client.request(method,{'threadId':'thread-1'} if method=='thread/resume' else {})
 
 
 class PipeProcess:

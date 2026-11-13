@@ -245,6 +245,8 @@ class MigrationTests(unittest.TestCase):
     def test_reverse_known_version_retains_new_consumption(self):
         self.apply()
         p = self.new(self.target)
+        from test_codex_app_protocol import MODEL
+        self.peer.models.append({**MODEL, 'id':'offline-secondary', 'model':'offline-secondary', 'isDefault':False})
         task = p.store(self.thread, 'stored secondary', 'secondary', model='offline-secondary')['id']
         p.cancel(task, 'cancel-secondary')
         before = self.state()
